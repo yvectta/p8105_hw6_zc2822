@@ -1,0 +1,104 @@
+---
+title: "p8105_hw6"
+author: "Zhengyong Chen"
+output: github_document
+---
+
+```{r setup, include=FALSE, message=FALSE}
+library(tidyverse)
+library(ggplot2)
+library(dplyr)
+library(knitr)
+```
+
+## Problem 2
+
+```{r load data, message=FALSE}
+homicide = read_csv("data/homicide-data.csv")
+```
+
+**Create a city_state variable, and a binary variable indicating whether the homicide is solved.**
+
+```{r}
+homicide = homicide |>
+  mutate(city_state = paste(city, state, sep = ", ")) |>
+  filter(
+    !(city_state %in% c("Dallas, TX", "Phoenix, AZ", "Kansas City, MO", "Tulsa, AL")),
+    victim_race %in% c("White", "Black"),
+    victim_age != "Unknown"
+  ) |>
+  mutate(solved = ifelse(grepl("Closed", disposition, ignore.case = TRUE), 1, 0),
+         victim_age = as.numeric(victim_age))
+```
+
+
+**Logistic regression for Baltimore**
+
+```{r}
+baltimore_data = homicide |>
+  filter(city_state == "Baltimore, MD") |> 
+  mutate(victim_sex = factor(victim_sex, levels = c("Female", "Male")))
+
+glm_fit = glm(
+  solved ~ victim_age + victim_sex + victim_race,
+  data = baltimore_data,
+  family = binomial
+)
+
+glm_results = broom::tidy(glm_fit, conf.int = TRUE, exponentiate = TRUE)
+
+glm_results |>
+  filter(term == "victim_sexMale") |>
+  select(estimate, conf.low, conf.high) |> 
+  kable(
+    col.names = c("Adjusted OR", "Lower CI", "Upper CI"),
+    caption = "Adjusted Odds Ratio for Solving Homicides (Male vs Female)",
+    digits = 3
+  )
+```
+
+**glm for each of the cities**
+
+```{r warning=FALSE}
+city_results = homicide |>
+  group_by(city_state) |>
+  nest() |>
+  mutate(
+    glm_fit = map(data, ~ glm(
+      solved ~ victim_age + victim_sex + victim_race,
+      data = .x,
+      family = binomial
+    )),
+    glm_tidy = map(glm_fit, ~ broom::tidy(.x, conf.int = TRUE, exponentiate = TRUE))
+  ) |>
+  unnest(glm_tidy) |>
+  filter(term == "victim_sexMale") |>
+  select(city_state, estimate, conf.low, conf.high)
+
+city_results |>
+  kable(
+    col.names = c("City, State", "Adjusted Odds Ratio", "Lower CI", "Upper CI"),
+    caption = "Adjusted Odds Ratios for Solving Homicides (Male vs Female) by City", 
+    digits = 3,
+    options = list(pageLength = 10)
+  ) 
+```
+
+**plot**
+
+```{r}
+city_results |>
+  arrange(estimate) |>
+  ggplot(aes(x = estimate, y = reorder(city_state, estimate))) +
+  geom_point() +
+  geom_errorbarh(aes(xmin = conf.low, xmax = conf.high), height = 0.2) +
+  labs(
+    x = "Adjusted Odds Ratio (Male vs Female)",
+    y = "City, State",
+    title = "Adjusted Odds Ratios for Solving Homicides by City",
+  ) +
+  theme_minimal()
+```
+
+Comment:\
+Several cities (Fresno, Minneapolis, and Stockton) show ORs above 1, suggesting male victims are more likely to have their cases solved, while others are below 1, indicating in most cities, female victims are more likely to have their cases solved. New York has the smallest adjusted odds ratio. Some cities like Fresno and Stockton has wider confidence intervals, indicating less precise estimates.
