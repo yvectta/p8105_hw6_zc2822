@@ -12,7 +12,79 @@ library(knitr)
 library(modelr)
 library(purrr)
 library(forcats)
+library(broom)
 ```
+
+```{r}
+set.seed(123)
+```
+
+
+## Problem 1
+
+```{r message=FALSE}
+weather_df = 
+  rnoaa::meteo_pull_monitors(
+    c("USW00094728"),
+    var = c("PRCP", "TMIN", "TMAX"), 
+    date_min = "2017-01-01",
+    date_max = "2017-12-31") %>%
+  mutate(
+    name = recode(id, USW00094728 = "CentralPark_NY"),
+    tmin = tmin / 10,
+    tmax = tmax / 10) %>%
+  select(name, id, everything())
+```
+
+
+```{r}
+bootstrap = function(data, n_bootstrap = 5000) {
+  data |>
+    modelr::bootstrap(n = n_bootstrap) |>
+    mutate(
+      models = map(strap, \(df) lm(tmax ~ tmin, data = as_tibble(df))),
+      r_squared = map_dbl(models, \(mod) glance(mod)$r.squared),
+      log_beta0_beta1 = map_dbl(models, \(mod) {
+        coef_mod = tidy(mod)
+        beta0 = coef_mod$estimate[coef_mod$term == "(Intercept)"]
+        beta1 = coef_mod$estimate[coef_mod$term == "tmin"]
+        log(beta0 * beta1)
+      })
+    ) |>
+    select(r_squared, log_beta0_beta1)
+}
+
+
+bootstrap_results = bootstrap(weather_df, n_bootstrap = 5000)
+
+conf_intervals =
+  bootstrap_results |>
+  summarise(
+    r_squared_low = quantile(r_squared, 0.025),
+    r_squared_high = quantile(r_squared, 0.975),
+    log_beta0_beta1_low = quantile(log_beta0_beta1, 0.025),
+    log_beta0_beta1_high = quantile(log_beta0_beta1, 0.975)
+  )
+
+conf_intervals |> 
+  kable(caption = "95% confidence interval for R^2 and log(β0 * β1)",
+        digits = 3)
+
+bootstrap_results |>
+  pivot_longer(cols = everything(), names_to = "metric", values_to = "value") |>
+  ggplot(aes(x = value, fill = metric)) +
+  geom_histogram(alpha = 0.6) +
+  facet_wrap(~ metric, scales = "free") +
+  labs(
+    title = "Bootstrap Distributions of R^2 and log(β0 * β1)",
+    x = "Value",
+    y = "Density",
+    fill = "Metric"
+  ) +
+  theme_minimal()
+```
+
+Both metrics show narrow, symmetric distributions, indicating consistent estimates from the bootstrap process. The distribution of $\log(\beta_0 \cdot \beta_1)$ is approximately normal, centered around 2. The distribution of $R^2$ is also approximately normal, centered around 0.91.
 
 ## Problem 2
 
@@ -180,7 +252,8 @@ cv_summary = cv_df|>
     full_interaction_mean_error = mean(rmse_full_interaction)
   )
 
-print(cv_summary)
+cv_summary |> 
+  kable()
 ```
 
 ``` {r}
